@@ -1,0 +1,565 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+// ── Enums ───────────────────────────────────────────────────────────────
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  WAREHOUSE_MANAGER
+  TEAM_LEADER
+  WAREHOUSE_STAFF
+  SALES_MANAGER
+  SALES_STAFF
+  TELECALLER
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  HALF_DAY
+  ON_LEAVE
+}
+
+enum TaskType {
+  PICKING
+  PACKING
+  DISPATCH
+  STOCK_COUNT
+  TRANSFER
+  RECEIVING
+  OTHER
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TaskStatus {
+  PENDING
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum UserStatus {
+  ACTIVE
+  ON_LEAVE
+  RESIGNED
+}
+
+enum InventoryTransactionType {
+  PURCHASE_IN
+  SALE_OUT
+  SALE_CANCELLED
+  TRANSFER_IN
+  TRANSFER_OUT
+  ADJUSTMENT
+}
+
+enum AdjustmentReason {
+  DAMAGE
+  LOSS
+  RECOUNT
+  OTHER
+}
+
+enum StockTransferStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  ORDERED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
+enum SalesOrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  STATUS_CHANGE
+}
+
+// ── Core / Access ───────────────────────────────────────────────────────
+
+model User {
+  id           Int      @id @default(autoincrement())
+  name         String
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         Role
+  status       UserStatus @default(ACTIVE)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  warehouseAssignments WarehouseStaff[]
+  createdPurchaseOrders PurchaseOrder[]     @relation("PurchaseOrderCreatedBy")
+  createdSalesOrders    SalesOrder[]        @relation("SalesOrderCreatedBy")
+  requestedTransfers     StockTransfer[]    @relation("TransferRequestedBy")
+  stockAdjustments       StockAdjustment[]  @relation("AdjustmentPerformedBy")
+  inventoryTransactions  InventoryTransaction[] @relation("TransactionPerformedBy")
+  notifications          Notification[]
+  auditLogs              AuditLog[]
+
+  employeeProfile   EmployeeProfile?
+  managedEmployees  EmployeeProfile[]  @relation("EmployeeManager")
+  attendanceRecords Attendance[]
+  tasksAssigned     WarehouseTask[]    @relation("TaskAssignedTo")
+  tasksCreated      WarehouseTask[]    @relation("TaskAssignedBy")
+
+  @@map("users")
+}
+
+// ── Employee management ────────────────────────────────────────────────
+
+model Department {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  description String?  @db.Text
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  employees EmployeeProfile[]
+
+  @@map("departments")
+}
+
+model Shift {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  startTime String   @map("start_time")
+  endTime   String   @map("end_time")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  employees EmployeeProfile[]
+
+  @@map("shifts")
+}
+
+model EmployeeProfile {
+  id           Int       @id @default(autoincrement())
+  userId       Int       @unique @map("user_id")
+  employeeCode String    @unique @map("employee_code")
+  phone        String?
+  photoUrl     String?   @map("photo_url")
+  departmentId Int?      @map("department_id")
+  shiftId      Int?      @map("shift_id")
+  warehouseId  Int?      @map("warehouse_id")
+  managerId    Int?      @map("manager_id")
+  designation  String?
+  joiningDate  DateTime? @map("joining_date")
+  salary       Decimal?  @db.Decimal(12, 2)
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department Department? @relation(fields: [departmentId], references: [id])
+  shift      Shift?      @relation(fields: [shiftId], references: [id])
+  warehouse  Warehouse?  @relation(fields: [warehouseId], references: [id])
+  manager    User?       @relation("EmployeeManager", fields: [managerId], references: [id])
+
+  @@index([departmentId])
+  @@index([shiftId])
+  @@index([warehouseId])
+  @@index([managerId])
+  @@map("employee_profiles")
+}
+
+model Attendance {
+  id               Int               @id @default(autoincrement())
+  employeeId       Int               @map("employee_id")
+  date             DateTime          @db.Date
+  checkInAt        DateTime?         @map("check_in_at")
+  checkOutAt       DateTime?         @map("check_out_at")
+  status           AttendanceStatus  @default(PRESENT)
+  workingMinutes   Int?              @map("working_minutes")
+  isLate           Boolean           @default(false) @map("is_late")
+  isEarlyCheckout  Boolean           @default(false) @map("is_early_checkout")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+
+  employee User @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, date])
+  @@index([employeeId, date])
+  @@map("attendance")
+}
+
+model WarehouseTask {
+  id            Int          @id @default(autoincrement())
+  title         String
+  description   String?      @db.Text
+  type          TaskType
+  priority      TaskPriority @default(MEDIUM)
+  status        TaskStatus   @default(PENDING)
+  assignedToId  Int?         @map("assigned_to")
+  assignedById  Int          @map("assigned_by")
+  warehouseId   Int          @map("warehouse_id")
+  dueDate       DateTime?    @map("due_date")
+  referenceType String?      @map("reference_type")
+  referenceId   Int?         @map("reference_id")
+  completedAt   DateTime?    @map("completed_at")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+
+  assignedTo User?     @relation("TaskAssignedTo", fields: [assignedToId], references: [id])
+  assignedBy User      @relation("TaskAssignedBy", fields: [assignedById], references: [id])
+  warehouse  Warehouse @relation(fields: [warehouseId], references: [id])
+
+  @@index([assignedToId, status])
+  @@index([warehouseId, status])
+  @@index([dueDate])
+  @@index([referenceType, referenceId])
+  @@map("warehouse_tasks")
+}
+
+model WarehouseStaff {
+  id          Int      @id @default(autoincrement())
+  userId      Int      @map("user_id")
+  warehouseId Int      @map("warehouse_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, warehouseId])
+  @@map("warehouse_staff")
+}
+
+// ── Master data ─────────────────────────────────────────────────────────
+
+model Category {
+  id       Int    @id @default(autoincrement())
+  name     String @unique
+  parentId Int?   @map("parent_id")
+
+  parent   Category?  @relation("CategoryToSubcategory", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryToSubcategory")
+  products Product[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("categories")
+}
+
+model Supplier {
+  id          Int      @id @default(autoincrement())
+  name        String
+  contactName String?  @map("contact_name")
+  email       String?  @unique
+  phone       String?
+  address     String?
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  products       Product[]
+  purchaseOrders PurchaseOrder[]
+
+  @@map("suppliers")
+}
+
+model Product {
+  id                Int      @id @default(autoincrement())
+  sku               String   @unique
+  name              String
+  categoryId        Int?     @map("category_id")
+  unit              String
+  unitPrice         Decimal  @map("unit_price") @db.Decimal(12, 2)
+  reorderLevel      Int      @default(0) @map("reorder_level")
+  defaultSupplierId Int?     @map("default_supplier_id")
+  description       String?  @db.Text
+  isActive          Boolean  @default(true) @map("is_active")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  category        Category? @relation(fields: [categoryId], references: [id])
+  defaultSupplier Supplier? @relation(fields: [defaultSupplierId], references: [id])
+
+  inventory              Inventory[]
+  inventoryTransactions  InventoryTransaction[]
+  stockAdjustments       StockAdjustment[]
+  stockTransferItems     StockTransferItem[]
+  purchaseOrderItems     PurchaseOrderItem[]
+  salesOrderItems        SalesOrderItem[]
+
+  @@index([categoryId])
+  @@map("products")
+}
+
+model Warehouse {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  address   String?
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  staff                 WarehouseStaff[]
+  inventory             Inventory[]
+  inventoryTransactions InventoryTransaction[]
+  stockAdjustments      StockAdjustment[]
+  transfersFrom         StockTransfer[] @relation("TransferSource")
+  transfersTo           StockTransfer[] @relation("TransferDestination")
+  purchaseOrders        PurchaseOrder[]
+  salesOrders           SalesOrder[]
+  employeeProfiles      EmployeeProfile[]
+  tasks                 WarehouseTask[]
+
+  @@map("warehouses")
+}
+
+model Customer {
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String?  @unique
+  phone     String?
+  address   String?
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  salesOrders SalesOrder[]
+
+  @@map("customers")
+}
+
+// ── Inventory (live state + audit trail) ──────────────────────────────────
+
+model Inventory {
+  id          Int      @id @default(autoincrement())
+  productId   Int      @map("product_id")
+  warehouseId Int      @map("warehouse_id")
+  quantity    Int      @default(0)
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  product   Product   @relation(fields: [productId], references: [id])
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
+
+  @@unique([productId, warehouseId])
+  @@index([warehouseId])
+  @@map("inventory")
+}
+
+model InventoryTransaction {
+  id              Int                       @id @default(autoincrement())
+  productId       Int                       @map("product_id")
+  warehouseId     Int                       @map("warehouse_id")
+  type            InventoryTransactionType
+  quantityChange  Int                       @map("quantity_change")
+  quantityBefore  Int                       @map("quantity_before")
+  quantityAfter   Int                       @map("quantity_after")
+  referenceType   String?                   @map("reference_type")
+  referenceId     Int?                      @map("reference_id")
+  performedById   Int?                      @map("performed_by")
+  createdAt       DateTime                  @default(now()) @map("created_at")
+
+  product     Product   @relation(fields: [productId], references: [id])
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  performedBy User?     @relation("TransactionPerformedBy", fields: [performedById], references: [id])
+
+  @@index([productId, warehouseId])
+  @@index([referenceType, referenceId])
+  @@index([createdAt])
+  @@map("inventory_transactions")
+}
+
+model StockAdjustment {
+  id             Int              @id @default(autoincrement())
+  productId      Int              @map("product_id")
+  warehouseId    Int              @map("warehouse_id")
+  quantityChange Int              @map("quantity_change")
+  reason         AdjustmentReason
+  notes          String?          @db.Text
+  performedById  Int              @map("performed_by")
+  createdAt      DateTime         @default(now()) @map("created_at")
+
+  product     Product   @relation(fields: [productId], references: [id])
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  performedBy User      @relation("AdjustmentPerformedBy", fields: [performedById], references: [id])
+
+  @@index([productId, warehouseId])
+  @@map("stock_adjustments")
+}
+
+model StockTransfer {
+  id                     Int                  @id @default(autoincrement())
+  sourceWarehouseId      Int                  @map("source_warehouse_id")
+  destinationWarehouseId Int                  @map("destination_warehouse_id")
+  status                 StockTransferStatus  @default(PENDING)
+  requestedById          Int                  @map("requested_by")
+  createdAt              DateTime             @default(now()) @map("created_at")
+  updatedAt              DateTime             @updatedAt @map("updated_at")
+
+  sourceWarehouse      Warehouse @relation("TransferSource", fields: [sourceWarehouseId], references: [id])
+  destinationWarehouse Warehouse @relation("TransferDestination", fields: [destinationWarehouseId], references: [id])
+  requestedBy          User      @relation("TransferRequestedBy", fields: [requestedById], references: [id])
+  items                StockTransferItem[]
+
+  @@index([status])
+  @@map("stock_transfers")
+}
+
+model StockTransferItem {
+  id              Int @id @default(autoincrement())
+  stockTransferId Int @map("stock_transfer_id")
+  productId       Int @map("product_id")
+  quantity        Int
+
+  stockTransfer StockTransfer @relation(fields: [stockTransferId], references: [id], onDelete: Cascade)
+  product       Product       @relation(fields: [productId], references: [id])
+
+  @@index([stockTransferId])
+  @@map("stock_transfer_items")
+}
+
+// ── Purchasing (Stock IN) ──────────────────────────────────────────────
+
+model PurchaseOrder {
+  id           Int                 @id @default(autoincrement())
+  supplierId   Int                 @map("supplier_id")
+  warehouseId  Int                 @map("warehouse_id")
+  status       PurchaseOrderStatus @default(DRAFT)
+  orderDate    DateTime?           @map("order_date")
+  expectedDate DateTime?           @map("expected_date")
+  createdById  Int                 @map("created_by")
+  totalAmount  Decimal             @default(0) @map("total_amount") @db.Decimal(14, 2)
+  createdAt    DateTime            @default(now()) @map("created_at")
+  updatedAt    DateTime            @updatedAt @map("updated_at")
+
+  supplier  Supplier  @relation(fields: [supplierId], references: [id])
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
+  createdBy User      @relation("PurchaseOrderCreatedBy", fields: [createdById], references: [id])
+  items     PurchaseOrderItem[]
+
+  @@index([status])
+  @@index([supplierId])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id                Int     @id @default(autoincrement())
+  purchaseOrderId   Int     @map("purchase_order_id")
+  productId         Int     @map("product_id")
+  quantityOrdered   Int     @map("quantity_ordered")
+  quantityReceived  Int     @default(0) @map("quantity_received")
+  unitCost          Decimal @map("unit_cost") @db.Decimal(12, 2)
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  product       Product       @relation(fields: [productId], references: [id])
+
+  @@index([purchaseOrderId])
+  @@map("purchase_order_items")
+}
+
+// ── Sales (Stock OUT) ───────────────────────────────────────────────────
+
+model SalesOrder {
+  id          Int              @id @default(autoincrement())
+  customerId  Int              @map("customer_id")
+  warehouseId Int              @map("warehouse_id")
+  status      SalesOrderStatus @default(PENDING)
+  orderDate   DateTime         @default(now()) @map("order_date")
+  createdById Int              @map("created_by")
+  totalAmount Decimal          @default(0) @map("total_amount") @db.Decimal(14, 2)
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+
+  customer  Customer  @relation(fields: [customerId], references: [id])
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
+  createdBy User      @relation("SalesOrderCreatedBy", fields: [createdById], references: [id])
+  items     SalesOrderItem[]
+
+  @@index([status])
+  @@index([customerId])
+  @@map("sales_orders")
+}
+
+model SalesOrderItem {
+  id           Int     @id @default(autoincrement())
+  salesOrderId Int     @map("sales_order_id")
+  productId    Int     @map("product_id")
+  quantity     Int
+  unitPrice    Decimal @map("unit_price") @db.Decimal(12, 2)
+
+  salesOrder SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  product    Product    @relation(fields: [productId], references: [id])
+
+  @@index([salesOrderId])
+  @@map("sales_order_items")
+}
+
+// ── Notifications / Audit / Settings ──────────────────────────────────
+
+model Notification {
+  id          Int      @id @default(autoincrement())
+  userId      Int?     @map("user_id")
+  role        Role?
+  type        String
+  message     String   @db.Text
+  relatedType String?  @map("related_type")
+  relatedId   Int?     @map("related_id")
+  isRead      Boolean  @default(false) @map("is_read")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id         Int         @id @default(autoincrement())
+  userId     Int         @map("user_id")
+  action     AuditAction
+  entityType String      @map("entity_type")
+  entityId   Int         @map("entity_id")
+  oldValue   Json?       @map("old_value")
+  newValue   Json?       @map("new_value")
+  createdAt  DateTime    @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model Setting {
+  id    Int    @id @default(autoincrement())
+  key   String @unique
+  value String @db.Text
+
+  @@map("settings")
+}
